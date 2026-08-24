@@ -1,0 +1,12 @@
+# Project place file
+/BloxGL.rbxlx
+
+# Roblox Studio lock files
+/*.rbxlx.lock
+/*.rbxl.lock
+
+# Rojo
+sourcemap.json
+
+# Selene
+roblox.yml
