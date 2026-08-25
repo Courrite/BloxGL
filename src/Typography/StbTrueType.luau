@@ -406,14 +406,7 @@ local function getGlyphContours(fontInfo: FontInfo, glyphIndex: number): { Conto
 	return contours
 end
 
-local function distanceToSegment(
-	px: number,
-	py: number,
-	ax: number,
-	ay: number,
-	bx: number,
-	by: number
-): number -- pythagorean theorem
+local function distanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number
 	local vx = bx - ax
 	local vy = by - ay
 	local lenSq = vx * vx + vy * vy
@@ -432,7 +425,7 @@ local function distanceToSegment(
 	return math.sqrt(dx * dx + dy * dy)
 end
 
-local function flattenQuadratic( -- turn a quadratic curved line into straight line segments
+local function flattenQuadratic(
 	ax: number,
 	ay: number,
 	bx: number,
