@@ -45,7 +45,7 @@ function Texture.GetEditableImage(self: Texture): EditableImage
 	return self._editableImage
 end
 
-function Texture.Shear(self: Texture, slantX: number, slantY: number?): Texture
+function Texture.ShearTo(self: Texture, outTex: Texture, slantX: number, slantY: number?): Texture
 	local sX = slantX or 0
 	local sY = slantY or 0
 	if sX == 0 and sY == 0 then
@@ -54,12 +54,6 @@ function Texture.Shear(self: Texture, slantX: number, slantY: number?): Texture
 
 	local qSX = math.round(sX * 20) / 20
 	local qSY = math.round(sY * 20) / 20
-	local cacheKey = tostring(qSX) .. "_" .. tostring(qSY)
-
-	local cached = self._shearCache[cacheKey]
-	if cached then
-		return cached
-	end
 
 	local srcImg = self._editableImage
 	local srcSize = srcImg.Size
@@ -68,7 +62,6 @@ function Texture.Shear(self: Texture, slantX: number, slantY: number?): Texture
 	local targetW = srcSize.X + extraW
 	local targetH = srcSize.Y + extraH
 
-	local outTex = new(Vector2.new(targetW, targetH)) :: Texture
 	local srcBuf = srcImg:ReadPixelsBuffer(Vector2.zero, srcSize)
 	local targetBuf = buffer.create(targetW * targetH * 4)
 
@@ -101,6 +94,34 @@ function Texture.Shear(self: Texture, slantX: number, slantY: number?): Texture
 	end
 
 	outTex:GetEditableImage():WritePixelsBuffer(Vector2.zero, Vector2.new(targetW, targetH), targetBuf)
+	return outTex
+end
+
+function Texture.Shear(self: Texture, slantX: number, slantY: number?): Texture
+	local sX = slantX or 0
+	local sY = slantY or 0
+	if sX == 0 and sY == 0 then
+		return self
+	end
+
+	local qSX = math.round(sX * 20) / 20
+	local qSY = math.round(sY * 20) / 20
+	local cacheKey = tostring(qSX) .. "_" .. tostring(qSY)
+
+	local cached = self._shearCache[cacheKey]
+	if cached then
+		return cached
+	end
+
+	local srcImg = self._editableImage
+	local srcSize = srcImg.Size
+	local extraW = math.ceil(srcSize.Y * math.abs(qSX))
+	local extraH = math.ceil(srcSize.X * math.abs(qSY))
+	local targetW = srcSize.X + extraW
+	local targetH = srcSize.Y + extraH
+
+	local outTex = new(Vector2.new(targetW, targetH)) :: Texture
+	self:ShearTo(outTex, slantX, slantY)
 	self._shearCache[cacheKey] = outTex
 	return outTex
 end

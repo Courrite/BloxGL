@@ -406,54 +406,64 @@ local function getGlyphContours(fontInfo: FontInfo, glyphIndex: number): { Conto
 	return contours
 end
 
-function StbTrueType.MakeCodepointBitmap(
-	fontInfo: FontInfo,
-	codepointOrWidth: number,
-	scaleXOrHeight: number?,
-	scaleYParam: number?,
-	widthParam: number?,
-	heightParam: number?,
-	x0Param: number?,
-	y0Param: number?
-): { number }
-	local codepoint: number
-	local scaleX: number
-	local scaleY: number
-	local width: number
-	local height: number
-	local x0: number
-	local y0: number
-
-	if widthParam ~= nil and heightParam ~= nil then
-		codepoint = codepointOrWidth
-		scaleX = scaleXOrHeight or 1
-		scaleY = scaleYParam or scaleX
-		width = widthParam
-		height = heightParam
-		x0 = x0Param or 0
-		y0 = y0Param or 0
-	else
-		codepoint = 0
-		scaleX = 1
-		scaleY = 1
-		width = codepointOrWidth
-		height = scaleXOrHeight or 0
-		x0 = 0
-		y0 = 0
+local function distanceToSegment(
+	px: number,
+	py: number,
+	ax: number,
+	ay: number,
+	bx: number,
+	by: number
+): number -- pythagorean theorem
+	local vx = bx - ax
+	local vy = by - ay
+	local lenSq = vx * vx + vy * vy
+	if lenSq == 0 then
+		local dx = px - ax
+		local dy = py - ay
+		return math.sqrt(dx * dx + dy * dy)
 	end
+	local wx = px - ax
+	local wy = py - ay
+	local t = math.clamp((wx * vx + wy * vy) / lenSq, 0, 1)
+	local nx = ax + t * vx
+	local ny = ay + t * vy
+	local dx = px - nx
+	local dy = py - ny
+	return math.sqrt(dx * dx + dy * dy)
+end
 
-	local bitmap: { number } = table.create(width * height, 0)
-	if width <= 0 or height <= 0 then
-		return bitmap
+local function flattenQuadratic( -- turn a quadratic curved line into straight line segments
+	ax: number,
+	ay: number,
+	bx: number,
+	by: number,
+	cx: number,
+	cy: number,
+	steps: number,
+	outSegments: { { ax: number, ay: number, bx: number, by: number } }
+)
+	local prevX, prevY = ax, ay
+	for i = 1, steps do
+		local t = i / steps
+		local invT = 1 - t
+		-- binomial expansion of quadratic bezier formula: (1-t)^2 * A + 2t(1-t) * B + t^2 * C
+		local x = invT * invT * ax + 2 * invT * t * bx + t * t * cx
+		local y = invT * invT * ay + 2 * invT * t * by + t * t * cy
+
+		table.insert(outSegments, { ax = prevX, ay = prevY, bx = x, by = y })
+		prevX, prevY = x, y
 	end
+end
 
-	local glyphIndex = StbTrueType.GetGlyphIndex(fontInfo, codepoint)
-	local contours = getGlyphContours(fontInfo, glyphIndex)
-	if #contours == 0 then
-		return bitmap
-	end
+local function getGlyphSegments(
+	contours: { { points: { Point } } },
+	scaleX: number,
+	scaleY: number,
+	originX: number,
+	originY: number
+)
+	local segments: { { ax: number, ay: number, bx: number, by: number } } = {}
 
-	local lineSegments: { Segment } = {}
 	for _, contour in contours do
 		local pts = contour.points
 		local nP = #pts
@@ -486,11 +496,11 @@ function StbTrueType.MakeCodepointBitmap(
 			local pt = pts[idx]
 
 			if pt.onCurve then
-				table.insert(lineSegments, {
-					x1 = currentP.x,
-					y1 = currentP.y,
-					x2 = pt.x,
-					y2 = pt.y,
+				table.insert(segments, {
+					ax = (currentP.x * scaleX) - originX,
+					ay = (-currentP.y * scaleY) - originY,
+					bx = (pt.x * scaleX) - originX,
+					by = (-pt.y * scaleY) - originY,
 				})
 				currentP = { x = pt.x, y = pt.y }
 				i += 1
@@ -508,113 +518,97 @@ function StbTrueType.MakeCodepointBitmap(
 					i += 1
 				end
 
-				local STEPS = 5
-				local prevX, prevY = currentP.x, currentP.y
-				for s = 1, STEPS do
-					local t = s / STEPS
-					local invT = 1 - t
-					local w0 = invT * invT
-					local w1 = 2 * invT * t
-					local w2 = t * t
-					local bx = w0 * currentP.x + w1 * ctrlP.x + w2 * endP.x
-					local by = w0 * currentP.y + w1 * ctrlP.y + w2 * endP.y
-					table.insert(lineSegments, {
-						x1 = prevX,
-						y1 = prevY,
-						x2 = bx,
-						y2 = by,
-					})
-					prevX, prevY = bx, by
-				end
+				flattenQuadratic(
+					(currentP.x * scaleX) - originX,
+					(-currentP.y * scaleY) - originY,
+					(ctrlP.x * scaleX) - originX,
+					(-ctrlP.y * scaleY) - originY,
+					(endP.x * scaleX) - originX,
+					(-endP.y * scaleY) - originY,
+					8,
+					segments
+				)
 				currentP = endP
 			end
 		end
 
 		if currentP.x ~= startP.x or currentP.y ~= startP.y then
-			table.insert(lineSegments, {
-				x1 = currentP.x,
-				y1 = currentP.y,
-				x2 = startP.x,
-				y2 = startP.y,
+			table.insert(segments, {
+				ax = (currentP.x * scaleX) - originX,
+				ay = (-currentP.y * scaleY) - originY,
+				bx = (startP.x * scaleX) - originX,
+				by = (-startP.y * scaleY) - originY,
 			})
 		end
 	end
 
-	local bitmapSegments: { Segment } = {}
-	for _, seg in lineSegments do
-		local bx1 = seg.x1 * scaleX - x0
-		local by1 = -seg.y1 * scaleY - y0
-		local bx2 = seg.x2 * scaleX - x0
-		local by2 = -seg.y2 * scaleY - y0
+	return segments
+end
 
-		if by1 ~= by2 then
-			table.insert(bitmapSegments, {
-				x1 = bx1,
-				y1 = by1,
-				x2 = bx2,
-				y2 = by2,
-			})
-		end
+function StbTrueType.MakeCodepointSDF(
+	fontInfo: FontInfo,
+	codepoint: number,
+	scale: number,
+	padding: number?
+): ({ number }, number, number, number, number)
+	local pad = padding or 12
+	local scaleX = scale
+	local scaleY = scale
+
+	local x0, y0, x1, y1 = StbTrueType.GetCodepointBitmapBox(fontInfo, codepoint, scaleX, scaleY)
+	local glyphWidth = math.max(0, math.ceil(x1) - math.floor(x0)) + 2
+	local glyphHeight = math.max(0, math.ceil(y1) - math.floor(y0)) + 2
+
+	if glyphWidth == 0 or glyphHeight == 0 then
+		return {}, 0, 0, 0, 0
 	end
 
-	local subpixelHits: { number } = table.create(width * height, 0)
-	local subYOffsets = { 0.125, 0.375, 0.625, 0.875 }
-	local subXOffsets = { 0.125, 0.375, 0.625, 0.875 }
+	local width = glyphWidth + pad * 2
+	local height = glyphHeight + pad * 2
+	local originX = x0 - pad
+	local originY = y0 - pad
 
-	for y = 0, height - 1 do
-		for _, syOffset in subYOffsets do
-			local sampleY = y + syOffset
+	local contours = getGlyphContours(fontInfo, StbTrueType.GetGlyphIndex(fontInfo, codepoint))
+	local segments = getGlyphSegments(contours, scaleX, scaleY, originX, originY)
 
-			local intersections: { { x: number, dir: number } } = {}
-			for _, seg in bitmapSegments do
-				local yMin = math.min(seg.y1, seg.y2)
-				local yMax = math.max(seg.y1, seg.y2)
-				if sampleY >= yMin and sampleY < yMax then
-					local t = (sampleY - seg.y1) / (seg.y2 - seg.y1)
-					local xInt = seg.x1 + t * (seg.x2 - seg.x1)
-					local dir = if seg.y2 > seg.y1 then 1 else -1
-					table.insert(intersections, { x = xInt, dir = dir })
+	local bufferOut = table.create(width * height, 0)
+	local maxDist = pad
+
+	for py = 0, height - 1 do
+		local pixelY = py + 0.5
+		for px = 0, width - 1 do
+			local pixelX = px + 0.5
+
+			local minDist = 1e9
+			local inside = false
+
+			for _, seg in segments do
+				local d = distanceToSegment(pixelX, pixelY, seg.ax, seg.ay, seg.bx, seg.by)
+				if d < minDist then
+					minDist = d
 				end
-			end
 
-			if #intersections >= 2 then
-				table.sort(intersections, function(a, b)
-					return a.x < b.x
-				end)
-
-				local winding = 0
-				for k = 1, #intersections - 1 do
-					winding += intersections[k].dir
-					if winding ~= 0 then
-						local xStart = intersections[k].x
-						local xEnd = intersections[k + 1].x
-
-						local minPx = math.clamp(math.floor(xStart), 0, width - 1)
-						local maxPx = math.clamp(math.floor(xEnd), 0, width - 1)
-
-						for px = minPx, maxPx do
-							for _, sxOffset in subXOffsets do
-								local sampleX = px + sxOffset
-								if sampleX >= xStart and sampleX < xEnd then
-									local index = y * width + px + 1
-									subpixelHits[index] += 1
-								end
-							end
-						end
+				-- ray casting along +x (right) to determine winding (inside vs outside)
+				-- check if the segment crosses the height of the pixel
+				if (seg.ay <= pixelY and seg.by > pixelY) or (seg.by <= pixelY and seg.ay > pixelY) then
+					-- find where the x coordinate where line segment crosses the height, where height is pixelY
+					local crossX = seg.ax + (pixelY - seg.ay) / (seg.by - seg.ay) * (seg.bx - seg.ax)
+					-- is crossX to the right of the pixel
+					if crossX > pixelX then
+						inside = not inside
 					end
 				end
 			end
+
+			local signedDist = if inside then -minDist else minDist
+			local normD = math.clamp(-signedDist / maxDist, -1, 1)
+			local byteVal = math.clamp(math.floor((normD * 0.5 + 0.5) * 255 + 0.5), 0, 255)
+
+			bufferOut[py * width + px + 1] = byteVal
 		end
 	end
 
-	for i = 1, width * height do
-		local hits = subpixelHits[i]
-		if hits > 0 then
-			bitmap[i] = math.clamp(math.floor((hits / 16) * 255), 0, 255)
-		end
-	end
-
-	return bitmap
+	return bufferOut, width, height, x0 - pad, y0 - pad
 end
 
 return StbTrueType

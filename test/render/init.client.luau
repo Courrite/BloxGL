@@ -17,8 +17,9 @@ local center = Vector2.new(960, 540)
 local timeElapsed = 0
 
 local textEffects = {
-	BloxGL.TextEffect.Slant(0.45, -0.15),
+	BloxGL.TextEffect.Wave(10, 15),
 	BloxGL.TextEffect.DropShadow(Vector2.new(4, 6), Color3.fromRGB(10, 12, 22)),
+	BloxGL.TextEffect.RainbowRadialGradient(Vector2.new(960, 540), 250, 0.75),
 }
 
 RunService.RenderStepped:Connect(function(deltaTime: number)
@@ -35,5 +36,3 @@ RunService.RenderStepped:Connect(function(deltaTime: number)
 
 	batch:End()
 end)
-
-

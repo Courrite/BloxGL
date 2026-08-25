@@ -10,6 +10,8 @@ export type GlyphInfo = {
 
 	BearingX: number,
 	BearingY: number,
+
+	SdfBitmap: { number }?,
 }
 
 return {}

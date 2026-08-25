@@ -19,18 +19,15 @@ export type FontAtlas = typeof(setmetatable(
 ))
 
 local function new(size: Vector2): FontAtlas
-	local self = setmetatable(
-		{
-			Size = size,
-			Texture = Texture(size),
+	local self = setmetatable({
+		Size = size,
+		Texture = Texture(size),
 
-			_buffer = buffer.create(size.X * size.Y * 4),
-			_currentX = 0,
-			_currentY = 0,
-			_rowHeight = 0,
-		},
-		FontAtlas
-	) :: FontAtlas
+		_buffer = buffer.create(size.X * size.Y * 4),
+		_currentX = 0,
+		_currentY = 0,
+		_rowHeight = 0,
+	}, FontAtlas) :: FontAtlas
 	return self
 end
 
@@ -48,12 +45,15 @@ function FontAtlas.TryPack(self: FontAtlas, bitmap: { number }, size: Vector2): 
 	local atlasX = self._currentX
 	local atlasY = self._currentY
 
-	-- NOTE: gx loop is inside of the gy loop because the 2d image buffers use row-major memory layout,
-    -- so if we did x first, this would cause a severe performance drop because of cpu cache misses
+	-- NOTE: gy loop is outside gx loop because 2d image buffers use row-major memory layout
 	local atlasWidth = self.Size.X
-	for gy = 0, size.Y - 1 do
-		for gx = 0, size.X - 1 do
-			local alpha = bitmap[gy * size.X + gx + 1] or 0
+	local glyphW = math.floor(size.X)
+	local glyphH = math.floor(size.Y)
+	local subBuf = buffer.create(glyphW * glyphH * 4)
+
+	for gy = 0, glyphH - 1 do
+		for gx = 0, glyphW - 1 do
+			local alpha = bitmap[gy * glyphW + gx + 1] or 0
 			local px = atlasX + gx
 			local py = atlasY + gy
 			local offset = (py * atlasWidth + px) * 4
@@ -62,6 +62,12 @@ function FontAtlas.TryPack(self: FontAtlas, bitmap: { number }, size: Vector2): 
 			buffer.writeu8(self._buffer, offset + 1, alpha)
 			buffer.writeu8(self._buffer, offset + 2, alpha)
 			buffer.writeu8(self._buffer, offset + 3, alpha)
+
+			local subOffset = (gy * glyphW + gx) * 4
+			buffer.writeu8(subBuf, subOffset, alpha)
+			buffer.writeu8(subBuf, subOffset + 1, alpha)
+			buffer.writeu8(subBuf, subOffset + 2, alpha)
+			buffer.writeu8(subBuf, subOffset + 3, alpha)
 		end
 	end
 
@@ -70,7 +76,7 @@ function FontAtlas.TryPack(self: FontAtlas, bitmap: { number }, size: Vector2): 
 	self._rowHeight = math.max(self._rowHeight, size.Y)
 
 	local editableImage = self.Texture:GetEditableImage()
-	editableImage:WritePixelsBuffer(Vector2.zero, self.Size, self._buffer)
+	editableImage:WritePixelsBuffer(Vector2.new(atlasX, atlasY), size, subBuf)
 
 	return Vector2.new(atlasX, atlasY)
 end

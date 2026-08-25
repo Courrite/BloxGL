@@ -65,7 +65,7 @@ function SpriteBatch.DrawRectangle(
 		local p = Texture(Vector2.one)
 		p:GetEditableImage():DrawRectangle(Vector2.zero, Vector2.one, color, 0, Enum.ImageCombineType.Overwrite)
 		self._pixelCache[color] = p
-        pixel = p
+		pixel = p
 	end
 
 	self:Draw(pixel, position, size, transparency, combineType)
@@ -86,8 +86,12 @@ function SpriteBatch.Flush(self: SpriteBatch)
 			local tileSize = quad[2]
 
 			-- AABB overlap test against target tile quad
-			if (pos.X < tilePos.X + tileSize.X) and (pos.X + size.X > tilePos.X)
-				and (pos.Y < tilePos.Y + tileSize.Y) and (pos.Y + size.Y > tilePos.Y) then
+			if
+				(pos.X < tilePos.X + tileSize.X)
+				and (pos.X + size.X > tilePos.X)
+				and (pos.Y < tilePos.Y + tileSize.Y)
+				and (pos.Y + size.Y > tilePos.Y)
+			then
 				images[i]:DrawImage(pos - tilePos, editableImg, mode)
 			end
 		end
