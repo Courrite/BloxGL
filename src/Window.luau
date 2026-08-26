@@ -41,6 +41,37 @@ function Window.Clear(self: Window, color: Color3)
 	end
 end
 
+function Window.ApplyShader(self: Window, shader: any, clipRect: Rect?)
+	local windowSize = self.Size
+	for idx, image in self._images do
+		local origin = self._quads[idx][1]
+		local tileSize = self._quads[idx][2]
+
+		if clipRect then
+			local tileMin = origin
+			local tileMax = origin + tileSize
+
+			if
+				clipRect.Min.X < tileMax.X
+				and clipRect.Max.X > tileMin.X
+				and clipRect.Min.Y < tileMax.Y
+				and clipRect.Max.Y > tileMin.Y
+			then
+				local localMin =
+					Vector2.new(math.max(0, clipRect.Min.X - origin.X), math.max(0, clipRect.Min.Y - origin.Y))
+				local localMax = Vector2.new(
+					math.min(tileSize.X, clipRect.Max.X - origin.X),
+					math.min(tileSize.Y, clipRect.Max.Y - origin.Y)
+				)
+				local localClip = Rect.new(localMin, localMax)
+				shader:ApplyToImage(image, origin, localClip, windowSize)
+			end
+		else
+			shader:ApplyToImage(image, origin, nil, windowSize)
+		end
+	end
+end
+
 function Window.GetQuads(self: Window): { { Vector2 } }
 	return self._quads
 end

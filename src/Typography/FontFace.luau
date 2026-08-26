@@ -27,15 +27,11 @@ export type FontFace = typeof(setmetatable(
 		_ttfData: buffer,
 		_fontInfo: FontInfo,
 		_scale: number,
-
-		_texturePool: { Texture.Texture },
-		_activeTransientTextures: { Texture.Texture },
-		_lastTime: number?,
 	},
 	FontFace
 ))
 
-function new(ttfData: buffer, fontSize: number?, aliased: boolean?): FontFace
+local function new(ttfData: buffer, fontSize: number?, aliased: boolean?): FontFace
 	local size = fontSize or 16
 	local atlas = FontAtlas(Vector2.new(1024, 1024))
 	local fontInfo = StbTrueType.CreateFont(ttfData)
@@ -53,34 +49,9 @@ function new(ttfData: buffer, fontSize: number?, aliased: boolean?): FontFace
 		_ttfData = ttfData,
 		_fontInfo = fontInfo,
 		_scale = scale,
-
-		_texturePool = {},
-		_activeTransientTextures = {},
-		_lastTime = nil,
 	}, FontFace) :: FontFace
 
 	return self
-end
-
-function FontFace.AcquireTransientTexture(self: FontFace, size: Vector2): Texture.Texture
-	for i, tex in self._texturePool do
-		if tex.Size.X == size.X and tex.Size.Y == size.Y then
-			table.remove(self._texturePool, i)
-			table.insert(self._activeTransientTextures, tex)
-			return tex
-		end
-	end
-
-	local tex = Texture(size)
-	table.insert(self._activeTransientTextures, tex)
-	return tex
-end
-
-function FontFace.ReleaseTransientTextures(self: FontFace)
-	for _, tex in self._activeTransientTextures do
-		table.insert(self._texturePool, tex)
-	end
-	table.clear(self._activeTransientTextures)
 end
 
 function FontFace.GetAtPixelScale(self: FontFace, pixelScale: number): FontFace
@@ -121,8 +92,12 @@ function FontFace.GetGlyph(self: FontFace, char: string): GlyphInfo
 
 	local codepoint = string.byte(char) or 0
 	local advance = StbTrueType.GetCodepointHMetrics(self._fontInfo, codepoint)
-	local sdfBitmap, width, height, originX, originY =
-		StbTrueType.MakeCodepointSDF(self._fontInfo, codepoint, self._scale, 12)
+	local sdfBitmap, width, height, originX, originY = StbTrueType.MakeCodepointSDF(
+		self._fontInfo,
+		codepoint,
+		self._scale,
+		12
+	)
 
 	local atlasPos = self._atlas:TryPack(sdfBitmap, Vector2.new(width, height))
 	local atlasX = if atlasPos then atlasPos.X else 0
@@ -194,65 +169,6 @@ function FontFace.GetGlyphTexture(self: FontFace, char: string, color: Color3): 
 
 	tex:GetEditableImage():WritePixelsBuffer(Vector2.zero, Vector2.new(width, height), buf)
 	self._glyphTextures[key] = tex
-	return tex
-end
-
-function FontFace.GetGlyphTextureWithFn(
-	self: FontFace,
-	char: string,
-	originPos: Vector2,
-	colorFn: (worldPos: Vector2, localNorm: Vector2) -> Color3
-): Texture.Texture?
-	local glyph = self:GetGlyph(char)
-	if glyph.Width == 0 or glyph.Height == 0 or not glyph.SdfBitmap then
-		return nil
-	end
-
-	local width = glyph.Width
-	local height = glyph.Height
-	local sdfBitmap = glyph.SdfBitmap
-
-	local tex = self:AcquireTransientTexture(Vector2.new(width, height))
-	local buf = buffer.create(width * height * 4)
-	local isAliased = self.Aliased
-	local invWidth = if width > 1 then 1 / (width - 1) else 0
-	local invHeight = if height > 1 then 1 / (height - 1) else 0
-
-	for gy = 0, height - 1 do
-		local worldY = originPos.Y + gy
-		local normY = if height > 1 then gy * invHeight else 0.5
-
-		for gx = 0, width - 1 do
-			local val = sdfBitmap[gy * width + gx + 1] or 0
-			if val == 0 then
-				continue
-			end
-
-			local normD = val / 255
-			local alphaFactor = if isAliased
-				then (if val >= 128 then 1 else 0)
-				else math.clamp((normD - 0.4375) / 0.125, 0, 1)
-
-			if alphaFactor > 0 then
-				local worldPos = Vector2.new(originPos.X + gx, worldY)
-				local localNorm = Vector2.new(if width > 1 then gx * invWidth else 0.5, normY)
-				local col = colorFn(worldPos, localNorm)
-
-				local r = math.clamp(math.floor(col.R * 255), 0, 255)
-				local g = math.clamp(math.floor(col.G * 255), 0, 255)
-				local b = math.clamp(math.floor(col.B * 255), 0, 255)
-				local alpha = math.floor(alphaFactor * 255)
-
-				local offset = (gy * width + gx) * 4
-				buffer.writeu8(buf, offset, r)
-				buffer.writeu8(buf, offset + 1, g)
-				buffer.writeu8(buf, offset + 2, b)
-				buffer.writeu8(buf, offset + 3, alpha)
-			end
-		end
-	end
-
-	tex:GetEditableImage():WritePixelsBuffer(Vector2.zero, Vector2.new(width, height), buf)
 	return tex
 end
 
@@ -363,41 +279,19 @@ function FontFace.DrawText(
 	sb: SpriteBatch,
 	text: string,
 	position: Vector2,
-	color: (Color3 | number)?,
-	outlineSize: (number | Color3)?,
-	outlineColor: (Color3 | number)?,
-	fontSize: number?
+	color: Color3?,
+	fontSize: number?,
+	outlineSize: number?,
+	outlineColor: Color3?
 )
-	local textColor: Color3 = Color3.fromRGB(255, 255, 255)
-	local outSize: number = 0
-	local outColor: Color3 = Color3.fromRGB(0, 0, 0)
-	local targetFontSize: number = self.FontSize
-
-	if typeof(color) == "Color3" then
-		textColor = color
-	elseif typeof(color) == "number" then
-		targetFontSize = color
-	end
-
-	if typeof(outlineSize) == "number" then
-		outSize = outlineSize
-	elseif typeof(outlineSize) == "Color3" then
-		outColor = outlineSize
-	end
-
-	if typeof(outlineColor) == "Color3" then
-		outColor = outlineColor
-	elseif typeof(outlineColor) == "number" then
-		targetFontSize = outlineColor
-	end
-
-	if typeof(fontSize) == "number" then
-		targetFontSize = fontSize
-	end
+	local textColor: Color3 = color or Color3.fromRGB(255, 255, 255)
+	local targetFontSize: number = fontSize or self.FontSize
+	local outSize: number = outlineSize or 0
+	local outColor: Color3 = outlineColor or Color3.fromRGB(0, 0, 0)
 
 	if targetFontSize ~= self.FontSize then
 		local scaledFace = self:GetAtFontSize(targetFontSize)
-		scaledFace:DrawText(sb, text, position, textColor, outSize, outColor)
+		scaledFace:DrawText(sb, text, position, textColor, targetFontSize, outSize, outColor)
 		return
 	end
 
@@ -413,20 +307,15 @@ function FontFace.DrawTextCentered(
 	sb: SpriteBatch,
 	text: string,
 	centerPos: Vector2,
-	color: (Color3 | number)?,
-	outlineSize: (number | Color3)?,
-	outlineColor: (Color3 | number)?,
-	fontSize: number?
+	color: Color3?,
+	fontSize: number?,
+	outlineSize: number?,
+	outlineColor: Color3?
 )
-	local targetFontSize = if typeof(fontSize) == "number"
-		then fontSize
-		elseif typeof(color) == "number" then color
-		elseif typeof(outlineColor) == "number" then outlineColor
-		else self.FontSize
-
+	local targetFontSize = fontSize or self.FontSize
 	local bounds = self:MeasureText(text, targetFontSize)
 	local drawPos = centerPos - Vector2.new(bounds.X / 2, bounds.Y / 2)
-	self:DrawText(sb, text, drawPos, color, outlineSize, outlineColor, fontSize)
+	self:DrawText(sb, text, drawPos, color, targetFontSize, outlineSize, outlineColor)
 end
 
 function FontFace._drawTextInternal(
@@ -481,95 +370,6 @@ function FontFace._drawTextInternal(
 	end
 end
 
-function FontFace.DrawTextWithEffects(
-	self: FontFace,
-	sb: SpriteBatch,
-	text: string,
-	position: Vector2,
-	color: Color3?,
-	fontSize: number?,
-	effects: { any }?,
-	time: number?
-)
-	local targetFontSize = fontSize or self.FontSize
-	if targetFontSize ~= self.FontSize then
-		local scaledFace = self:GetAtFontSize(targetFontSize)
-		scaledFace:DrawTextWithEffects(sb, text, position, color, targetFontSize, effects, time)
-		return
-	end
-
-	local currentTime = time or 0
-	if currentTime ~= self._lastTime then
-		self:ReleaseTransientTextures()
-		self._lastTime = currentTime
-	end
-
-	local charOffsets, totalWidth = self:GetCharacterOffsets(text)
-	local baseColor = color or Color3.fromRGB(255, 255, 255)
-	local numChars = #charOffsets
-
-	for i, item in charOffsets do
-		if item.char == " " then
-			continue
-		end
-
-		local glyph = self:GetGlyph(item.char)
-		if glyph.Width == 0 or glyph.Height == 0 then
-			continue
-		end
-
-		local glyphOffset = Vector2.new(glyph.BearingX, glyph.BearingY)
-		local charPos = position + Vector2.new(item.xOffset, 0) + glyphOffset
-
-		local ctx = {
-			batch = sb,
-			fontFace = self,
-			char = item.char,
-			charIndex = i,
-			totalChars = numChars,
-			normalizedX = if totalWidth > 0 then item.xOffset / totalWidth else 0,
-			basePosition = charPos,
-			position = charPos,
-			color = baseColor,
-			transparency = 0,
-			shear = Vector2.zero,
-			time = currentTime,
-			colorFn = nil :: ((worldPos: Vector2, localNorm: Vector2) -> Color3)?,
-		}
-
-		if effects then
-			for _, effect in effects do
-				effect:Apply(ctx)
-			end
-		end
-
-		local fgTex
-		if ctx.colorFn then
-			fgTex = self:GetGlyphTextureWithFn(ctx.char, ctx.position, ctx.colorFn)
-		else
-			fgTex = self:GetGlyphTexture(ctx.char, ctx.color)
-		end
-
-		if fgTex then
-			if ctx.shear.X ~= 0 or ctx.shear.Y ~= 0 then
-				if ctx.colorFn then
-					local qSX = math.round(ctx.shear.X * 20) / 20
-					local qSY = math.round(ctx.shear.Y * 20) / 20
-					local extraW = math.ceil(fgTex.Height * math.abs(qSX))
-					local extraH = math.ceil(fgTex.Width * math.abs(qSY))
-					local targetW = fgTex.Width + extraW
-					local targetH = fgTex.Height + extraH
-					local shearedTex = self:AcquireTransientTexture(Vector2.new(targetW, targetH))
-					fgTex = fgTex:ShearTo(shearedTex, ctx.shear.X, ctx.shear.Y)
-				else
-					fgTex = fgTex:Shear(ctx.shear.X, ctx.shear.Y)
-				end
-			end
-			sb:Draw(fgTex, ctx.position, nil, ctx.transparency)
-		end
-	end
-end
-
 function FontFace.Destroy(self: FontFace)
 	for _, face in self._scaledFaces do
 		face:Destroy()
@@ -580,14 +380,6 @@ function FontFace.Destroy(self: FontFace)
 		tex:Destroy()
 	end
 	table.clear(self._glyphTextures)
-	for _, tex in self._texturePool do
-		tex:Destroy()
-	end
-	table.clear(self._texturePool)
-	for _, tex in self._activeTransientTextures do
-		tex:Destroy()
-	end
-	table.clear(self._activeTransientTextures)
 end
 
 return new

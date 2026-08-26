@@ -1,4 +1,5 @@
 --!strict
+local EditableImage = require("../Roblox/EditableImage")
 
 local Texture = require("./Texture")
 local Window = require("../Window")
@@ -7,6 +8,7 @@ type Order = {
 	texture: Texture.Texture,
 	position: Vector2,
 	size: Vector2,
+	clipRect: Rect?,
 	transparency: number,
 	combineType: Enum.ImageCombineType,
 }
@@ -41,12 +43,14 @@ function SpriteBatch.Draw(
 	position: Vector2?,
 	size: Vector2?,
 	transparency: number?,
-	combineType: Enum.ImageCombineType?
+	combineType: Enum.ImageCombineType?,
+	clipRect: Rect?
 )
 	table.insert(self._queue, {
 		texture = texture,
 		position = position or Vector2.zero,
 		size = size or texture.Size,
+		clipRect = clipRect,
 		transparency = transparency or 0,
 		combineType = combineType or Enum.ImageCombineType.AlphaBlend,
 	})
@@ -80,19 +84,29 @@ function SpriteBatch.Flush(self: SpriteBatch)
 		local size = order.size
 		local mode = order.combineType
 		local editableImg = order.texture:GetEditableImage()
+		local clipRect = order.clipRect
 
 		for i, quad in quads do
 			local tilePos = quad[1]
 			local tileSize = quad[2]
 
-			-- AABB overlap test against target tile quad
 			if
 				(pos.X < tilePos.X + tileSize.X)
 				and (pos.X + size.X > tilePos.X)
 				and (pos.Y < tilePos.Y + tileSize.Y)
 				and (pos.Y + size.Y > tilePos.Y)
 			then
-				images[i]:DrawImage(pos - tilePos, editableImg, mode)
+				if clipRect then
+					local startPos = clipRect.Min
+					local clipSize = Vector2.new(clipRect.Width, clipRect.Height)
+
+					local destinationImage = EditableImage(clipSize)
+					destinationImage:DrawImageTransformed(Vector2.zero - startPos, clipSize, 0, editableImg)
+
+					images[i]:DrawImage(pos - tilePos, destinationImage, mode)
+				else
+					images[i]:DrawImage(pos - tilePos, editableImg, mode)
+				end
 			end
 		end
 	end
