@@ -1,4 +1,5 @@
 --!strict
+--!native
 
 local Shader = {}
 Shader.__index = Shader
@@ -9,8 +10,6 @@ local band = bit32.band
 local rshift = bit32.rshift
 local lshift = bit32.lshift
 
-export type UniformValue = number | Vector2 | { Vector2 }
-
 export type PixelCallback = (
 	worldX: number,
 	worldY: number,
@@ -20,13 +19,13 @@ export type PixelCallback = (
 	g: number,
 	b: number,
 	a: number,
-	uniforms: { [number]: UniformValue }
+	uniforms: { [number]: any }
 ) -> (number, number, number, number, number?, number?)
 
 export type Shader = typeof(setmetatable(
 	{} :: {
 		_callback: PixelCallback?,
-		_uniforms: { [number]: UniformValue },
+		_uniforms: { [number]: any },
 		_scratchBuf: buffer?,
 		_downscale: number,
 	},
@@ -44,15 +43,15 @@ local function new(module: ModuleScript, downscale: number?): Shader
 	}, Shader) :: Shader
 end
 
-function Shader.SetUniform(self: Shader, location: number, value: UniformValue)
+function Shader.SetUniform(self: Shader, location: number, value: any)
 	self._uniforms[location] = value
 end
 
-function Shader.GetUniform(self: Shader, location: number): UniformValue?
+function Shader.GetUniform(self: Shader, location: number): any?
 	return self._uniforms[location]
 end
 
-function Shader.GetUniforms(self: Shader): { [number]: UniformValue }
+function Shader.GetUniforms(self: Shader): { [number]: any }
 	return self._uniforms
 end
 
@@ -66,7 +65,10 @@ function Shader.ApplyToBuffer(
 	dimensions: Vector2,
 	origin: Vector2?,
 	windowSize: Vector2?,
-	customUniforms: { [number]: UniformValue }?
+	customUniforms: { [number]: any }?,
+	tileOffset: Vector2?,
+	tileSize: Vector2?,
+	fullSrcBuf: buffer?
 )
 	local callback = self._callback
 	if not callback then
@@ -79,12 +81,27 @@ function Shader.ApplyToBuffer(
 		return
 	end
 
-	local neededLen = buffer.len(buf)
-	if not self._scratchBuf or buffer.len(self._scratchBuf) < neededLen then
-		self._scratchBuf = buffer.create(neededLen)
+	local tOff = tileOffset or Vector2.zero
+	local tSize = tileSize or dimensions
+
+	local minGX = math.floor(tOff.X)
+	local minGY = math.floor(tOff.Y)
+	local tileW = math.floor(tSize.X)
+	local tileH = math.floor(tSize.Y)
+	local maxGX = math.min(width - 1, minGX + tileW - 1)
+	local maxGY = math.min(height - 1, minGY + tileH - 1)
+
+	local srcBuf: buffer
+	if fullSrcBuf then
+		srcBuf = fullSrcBuf
+	else
+		local neededLen = buffer.len(buf)
+		if not self._scratchBuf or buffer.len(self._scratchBuf) < neededLen then
+			self._scratchBuf = buffer.create(neededLen)
+		end
+		srcBuf = self._scratchBuf :: buffer
+		buffer.copy(srcBuf, 0, buf, 0, neededLen)
 	end
-	local srcBuf = self._scratchBuf :: buffer
-	buffer.copy(srcBuf, 0, buf, 0, neededLen)
 
 	local boundsW = windowSize and windowSize.X or dimensions.X
 	local boundsH = windowSize and windowSize.Y or dimensions.Y
@@ -97,20 +114,24 @@ function Shader.ApplyToBuffer(
 	local originY = org.Y
 
 	local INV_255 = 1 / 255
-	local maxGX = width - 1
-	local maxGY = height - 1
 	local scale = self._downscale
 
-	for gy = 0, maxGY, scale do
+	local stepNormX = scale * invBoundsW
+	local startWorldX = originX + minGX
+	local startNormX = startWorldX * invBoundsW
+
+	for gy = minGY, maxGY, scale do
 		local worldY = originY + gy
 		local normY = worldY * invBoundsH
+		local localGY = gy - minGY
+		local rowOffset = gy * width
 
-		for gx = 0, maxGX, scale do
-			local offset = (gy * width + gx) * 4
-			local rgba = readu32(srcBuf, offset)
+		local worldX = startWorldX
+		local normX = startNormX
 
-			local worldX = originX + gx
-			local normX = worldX * invBoundsW
+		for gx = minGX, maxGX, scale do
+			local srcOffset = (rowOffset + gx) * 4
+			local rgba = readu32(srcBuf, srcOffset)
 
 			local r = band(rgba, 0xFF)
 			local g = band(rshift(rgba, 8), 0xFF)
@@ -126,15 +147,17 @@ function Shader.ApplyToBuffer(
 				local rawGX = math.floor(sampleWorldX - originX)
 				local rawGY = math.floor(sampleWorldY - originY)
 
-				local sampleGX = rawGX < 0 and 0 or rawGX > maxGX and maxGX or rawGX
-				local sampleGY = rawGY < 0 and 0 or rawGY > maxGY and maxGY or rawGY
-				local sampleOffset = (sampleGY * width + sampleGX) * 4
-
-				local sRgba = readu32(srcBuf, sampleOffset)
-				local sr = band(sRgba, 0xFF)
-				local sg = band(rshift(sRgba, 8), 0xFF)
-				local sb = band(rshift(sRgba, 16), 0xFF)
-				local sa = rshift(sRgba, 24)
+				local sr, sg, sb, sa
+				if rawGX < 0 or rawGX > width - 1 or rawGY < 0 or rawGY > height - 1 then
+					sr, sg, sb, sa = 0, 0, 0, 0
+				else
+					local sampleOffset = (rawGY * width + rawGX) * 4
+					local sRgba = readu32(srcBuf, sampleOffset)
+					sr = band(sRgba, 0xFF)
+					sg = band(rshift(sRgba, 8), 0xFF)
+					sb = band(rshift(sRgba, 16), 0xFF)
+					sa = rshift(sRgba, 24)
+				end
 
 				nr = (sr * INV_255) * nr
 				ng = (sg * INV_255) * ng
@@ -142,27 +165,37 @@ function Shader.ApplyToBuffer(
 				na = sa
 			end
 
-			local outR = nr < 0 and 0 or nr > 255 and 255 or nr
-			local outG = ng < 0 and 0 or ng > 255 and 255 or ng
-			local outB = nb < 0 and 0 or nb > 255 and 255 or nb
-			local outA = na < 0 and 0 or na > 255 and 255 or na
+			local outR = math.clamp(math.floor(nr), 0, 255)
+			local outG = math.clamp(math.floor(ng), 0, 255)
+			local outB = math.clamp(math.floor(nb), 0, 255)
+			local outA = math.clamp(math.floor(na), 0, 255)
 
 			local outRgba = bit32.bor(outR, lshift(outG, 8), lshift(outB, 16), lshift(outA, 24))
 
-			for dy = 0, scale - 1 do
-				local targetY = gy + dy
-				if targetY > maxGY then
-					break
-				end
-				local targetRow = targetY * width
-				for dx = 0, scale - 1 do
-					local targetX = gx + dx
-					if targetX > maxGX then
+			local localGX = gx - minGX
+			local dstOffset = (localGY * tileW + localGX) * 4
+
+			if scale == 1 then
+				writeu32(buf, dstOffset, outRgba)
+			else
+				for dy = 0, scale - 1 do
+					local targetY = localGY + dy
+					if targetY >= tileH then
 						break
 					end
-					writeu32(buf, (targetRow + targetX) * 4, outRgba)
+					local targetRow = targetY * tileW
+					for dx = 0, scale - 1 do
+						local targetX = localGX + dx
+						if targetX >= tileW then
+							break
+						end
+						writeu32(buf, (targetRow + targetX) * 4, outRgba)
+					end
 				end
 			end
+
+			worldX += scale
+			normX += stepNormX
 		end
 	end
 end
