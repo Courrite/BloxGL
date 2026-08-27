@@ -54,10 +54,10 @@ function StbTrueType.CreateFont(fontBuffer: buffer): FontInfo
 	local hhea = tables["hhea"]
 	local cmap = tables["cmap"]
 
-	local unitsPerEm = if head then readU16BE(fontBuffer, head.offset + 18) else 2048
-	local indexToLocFormat = if head then readI16BE(fontBuffer, head.offset + 50) else 0
-	local numberOfHMetrics = if hhea then readU16BE(fontBuffer, hhea.offset + 34) else 0
-	local cmapOffset = if cmap then cmap.offset else 0
+	local unitsPerEm = head and readU16BE(fontBuffer, head.offset + 18) or 2048
+	local indexToLocFormat = head and readI16BE(fontBuffer, head.offset + 50) or 0
+	local numberOfHMetrics = hhea and readU16BE(fontBuffer, hhea.offset + 34) or 0
+	local cmapOffset = cmap and cmap.offset or 0
 
 	return {
 		buffer = fontBuffer,
@@ -208,8 +208,17 @@ function StbTrueType.GetCodepointBitmapBox(
 end
 
 type Point = { x: number, y: number, onCurve: boolean }
-type Contour = { points: { Point } }
+type Contour = { points: buffer }
 type Segment = { x1: number, y1: number, x2: number, y2: number }
+
+local function getPointFromBuffer(buf: buffer, idx: number): Point
+	local offset = (idx - 1) * 5
+	return {
+		x = buffer.readi16(buf, offset),
+		y = buffer.readi16(buf, offset + 2),
+		onCurve = buffer.readu8(buf, offset + 4) ~= 0,
+	}
+end
 
 local function getGlyphContours(fontInfo: FontInfo, glyphIndex: number): { Contour }
 	local contours: { Contour } = {}
@@ -314,15 +323,14 @@ local function getGlyphContours(fontInfo: FontInfo, glyphIndex: number): { Conto
 		local startIdx = 1
 		for c = 1, numberOfContours do
 			local endIdx = endPtsOfContours[c] + 1
-			local contourPoints: { Point } = {}
+			local countourPointsBuffer = buffer.create((endIdx - startIdx + 1) * 5)
 			for k = startIdx, endIdx do
-				table.insert(contourPoints, {
-					x = xPoints[k],
-					y = yPoints[k],
-					onCurve = bit32.band(flags[k], 1) ~= 0,
-				})
+				local offset = (k - startIdx) * 5
+				buffer.writei16(countourPointsBuffer, offset, xPoints[k])
+				buffer.writei16(countourPointsBuffer, offset + 2, yPoints[k])
+				buffer.writeu8(countourPointsBuffer, offset + 4, bit32.band(flags[k], 1))
 			end
-			table.insert(contours, { points = contourPoints })
+			table.insert(contours, { points = countourPointsBuffer })
 			startIdx = endIdx + 1
 		end
 	elseif numberOfContours < 0 then
@@ -384,17 +392,22 @@ local function getGlyphContours(fontInfo: FontInfo, glyphIndex: number): { Conto
 
 			local subContours = getGlyphContours(fontInfo, subGlyphIndex)
 			for _, subContour in subContours do
-				local transformedPoints: { Point } = {}
-				for _, p in subContour.points do
-					local newX = mtxA * p.x + mtxC * p.y + dx
-					local newY = mtxB * p.x + mtxD * p.y + dy
-					table.insert(transformedPoints, {
-						x = newX,
-						y = newY,
-						onCurve = p.onCurve,
-					})
+				local pointsBuffer = subContour.points
+				local numPoints = buffer.len(pointsBuffer) // 5
+				local transformedBuffer = buffer.create(numPoints * 5)
+
+				for k = 1, numPoints do
+					local p = getPointFromBuffer(pointsBuffer, k)
+					local newX = math.round(mtxA * p.x + mtxC * p.y + dx)
+					local newY = math.round(mtxB * p.x + mtxD * p.y + dy)
+
+					local offset = (k - 1) * 5
+					buffer.writei16(transformedBuffer, offset, newX)
+					buffer.writei16(transformedBuffer, offset + 2, newY)
+					buffer.writeu8(transformedBuffer, offset + 4, if p.onCurve then 1 else 0)
 				end
-				table.insert(contours, { points = transformedPoints })
+
+				table.insert(contours, { points = transformedBuffer })
 			end
 
 			if bit32.band(compFlags, MORE_COMPONENTS) == 0 then
@@ -448,31 +461,25 @@ local function flattenQuadratic(
 	end
 end
 
-local function getGlyphSegments(
-	contours: { { points: { Point } } },
-	scaleX: number,
-	scaleY: number,
-	originX: number,
-	originY: number
-)
+local function getGlyphSegments(contours: { Contour }, scaleX: number, scaleY: number, originX: number, originY: number)
 	local segments: { { ax: number, ay: number, bx: number, by: number } } = {}
 
 	for _, contour in contours do
 		local pts = contour.points
-		local nP = #pts
+		local nP = buffer.len(pts) // 5
 		if nP < 2 then
 			continue
 		end
 
 		local startIndex = 1
-		local firstPt = pts[1]
+		local firstPt = getPointFromBuffer(pts, 1)
 		local startP: { x: number, y: number }
 
 		if firstPt.onCurve then
 			startP = { x = firstPt.x, y = firstPt.y }
 			startIndex = 2
 		else
-			local lastPt = pts[nP]
+			local lastPt = getPointFromBuffer(pts, nP)
 			if lastPt.onCurve then
 				startP = { x = lastPt.x, y = lastPt.y }
 				startIndex = 1
@@ -486,7 +493,7 @@ local function getGlyphSegments(
 		local i = 0
 		while i < nP do
 			local idx = (startIndex - 1 + i) % nP + 1
-			local pt = pts[idx]
+			local pt = getPointFromBuffer(pts, idx)
 
 			if pt.onCurve then
 				table.insert(segments, {
@@ -500,7 +507,7 @@ local function getGlyphSegments(
 			else
 				local ctrlP = pt
 				local nextIdx = (idx % nP) + 1
-				local nextPt = pts[nextIdx]
+				local nextPt = getPointFromBuffer(pts, nextIdx)
 				local endP: { x: number, y: number }
 
 				if nextPt.onCurve then
@@ -593,7 +600,7 @@ function StbTrueType.MakeCodepointSDF(
 				end
 			end
 
-			local signedDist = if inside then -minDist else minDist
+			local signedDist = inside and -minDist or minDist
 			local normD = math.clamp(-signedDist / maxDist, -1, 1)
 			local byteVal = math.clamp(math.floor((normD * 0.5 + 0.5) * 255 + 0.5), 0, 255)
 

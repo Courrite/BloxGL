@@ -10,7 +10,7 @@ export type Texture = typeof(setmetatable(
 		Size: Vector2,
 		Width: number,
 		Height: number,
-		
+
 		_editableImage: EditableImage,
 		_shearCache: { [string]: Texture },
 	},
@@ -74,8 +74,8 @@ function Texture.ShearTo(self: Texture, outTex: Texture, slantX: number, slantY:
 				local g = buffer.readu8(srcBuf, srcOffset + 1)
 				local b = buffer.readu8(srcBuf, srcOffset + 2)
 
-				local offsetX = if qSX >= 0 then (srcSize.Y - 1 - gy) * qSX else gy * -qSX
-				local offsetY = if qSY >= 0 then gx * qSY else (srcSize.X - 1 - gx) * -qSY
+				local offsetX = qSX >= 0 and (srcSize.Y - 1 - gy) * qSX or gy * -qSX
+				local offsetY = qSY >= 0 and gx * qSY or (srcSize.X - 1 - gx) * -qSY
 
 				local tx = math.clamp(math.floor(gx + offsetX), 0, targetW - 1)
 				local ty = math.clamp(math.floor(gy + offsetY), 0, targetH - 1)

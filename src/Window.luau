@@ -1,13 +1,20 @@
 --!strict
+local Players = game:GetService("Players")
+local SharedTableRegistry = game:GetService("SharedTableRegistry")
+
+local ShaderWorker = script.Parent.Graphics.Shader.ShaderWorker
 
 local EditableImage = require("./Roblox/EditableImage")
 local ScreenGui = require("./Roblox/ScreenGui")
 local ImageLabel = require("./Roblox/ImageLabel")
 
+local plr = Players.LocalPlayer
+local scripts = plr.PlayerScripts
+
 local Window = {}
 Window.__index = Window
 
-const EDITABLE_IMAGE_SIZE_LIMIT = 1024
+local EDITABLE_IMAGE_SIZE_LIMIT = 1024
 
 local function CalculateEditableImagesNeededForMatrix(x: number, y: number): { { Vector2 } }
 	local cols = math.ceil(x / EDITABLE_IMAGE_SIZE_LIMIT)
@@ -20,7 +27,6 @@ local function CalculateEditableImagesNeededForMatrix(x: number, y: number): { {
 			local posX = EDITABLE_IMAGE_SIZE_LIMIT * i
 			local posY = EDITABLE_IMAGE_SIZE_LIMIT * j
 
-			-- clamp the width and height to the remaining width/height of the canvas
 			local width = math.min(EDITABLE_IMAGE_SIZE_LIMIT, x - posX)
 			local height = math.min(EDITABLE_IMAGE_SIZE_LIMIT, y - posY)
 
@@ -41,34 +47,19 @@ function Window.Clear(self: Window, color: Color3)
 	end
 end
 
-function Window.ApplyShader(self: Window, shader: any, clipRect: Rect?)
-	local windowSize = self.Size
-	for idx, image in self._images do
-		local origin = self._quads[idx][1]
-		local tileSize = self._quads[idx][2]
+function Window.ApplyShader(self: Window, module: ModuleScript, downscale: number?)
+	for i, actor in self._actors do
+		local img = self._images[i]
 
-		if clipRect then
-			local tileMin = origin
-			local tileMax = origin + tileSize
-
-			if
-				clipRect.Min.X < tileMax.X
-				and clipRect.Max.X > tileMin.X
-				and clipRect.Min.Y < tileMax.Y
-				and clipRect.Max.Y > tileMin.Y
-			then
-				local localMin =
-					Vector2.new(math.max(0, clipRect.Min.X - origin.X), math.max(0, clipRect.Min.Y - origin.Y))
-				local localMax = Vector2.new(
-					math.min(tileSize.X, clipRect.Max.X - origin.X),
-					math.min(tileSize.Y, clipRect.Max.Y - origin.Y)
-				)
-				local localClip = Rect.new(localMin, localMax)
-				shader:ApplyToImage(image, origin, localClip, windowSize)
-			end
-		else
-			shader:ApplyToImage(image, origin, nil, windowSize)
-		end
+		actor:SendMessage(
+			"ApplyShaderTile",
+			module,
+			img,
+			img:ReadPixelsBuffer(Vector2.zero, img.Size),
+			self._quads[i][1],
+			self.Size,
+			downscale
+		)
 	end
 end
 
@@ -83,8 +74,10 @@ end
 export type Window = typeof(setmetatable(
 	{} :: {
 		Size: Vector2,
+
 		_quads: { { Vector2 } },
 		_images: { EditableImage },
+		_actors: { Actor },
 	},
 	Window
 ))
@@ -92,8 +85,10 @@ export type Window = typeof(setmetatable(
 local function new(size: Vector2): Window
 	local self = setmetatable({
 		Size = size,
+
 		_quads = {},
 		_images = {},
+		_actors = {},
 	}, Window) :: Window
 
 	local quads = CalculateEditableImagesNeededForMatrix(size.X, size.Y)
@@ -102,6 +97,12 @@ local function new(size: Vector2): Window
 	for i, quad in quads do
 		local quadSize = quad[2]
 		self._images[i] = EditableImage(quadSize)
+
+		local actor = ShaderWorker:Clone()
+		actor.Parent = scripts
+		actor.Worker.Enabled = true
+
+		self._actors[i] = actor
 	end
 
 	local screenGui = ScreenGui()

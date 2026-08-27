@@ -84,24 +84,22 @@ function FontFace.GetAtFontSize(self: FontFace, targetSize: number): FontFace
 	return face
 end
 
-function FontFace.GetGlyph(self: FontFace, char: string): GlyphInfo
-	local cached = self._cache[char]
+function FontFace.GetGlyph(self: FontFace, charOrCodepoint: string | number): GlyphInfo
+	local codepoint: number = typeof(charOrCodepoint) == "number" and charOrCodepoint
+		or (string.byte(charOrCodepoint :: string) or 0)
+	local cacheKey: string = tostring(codepoint)
+	local cached = self._cache[cacheKey]
 	if cached then
 		return cached
 	end
 
-	local codepoint = string.byte(char) or 0
 	local advance = StbTrueType.GetCodepointHMetrics(self._fontInfo, codepoint)
-	local sdfBitmap, width, height, originX, originY = StbTrueType.MakeCodepointSDF(
-		self._fontInfo,
-		codepoint,
-		self._scale,
-		12
-	)
+	local sdfBitmap, width, height, originX, originY =
+		StbTrueType.MakeCodepointSDF(self._fontInfo, codepoint, self._scale, 12)
 
 	local atlasPos = self._atlas:TryPack(sdfBitmap, Vector2.new(width, height))
-	local atlasX = if atlasPos then atlasPos.X else 0
-	local atlasY = if atlasPos then atlasPos.Y else 0
+	local atlasX = atlasPos and atlasPos.X or 0
+	local atlasY = atlasPos and atlasPos.Y or 0
 
 	local glyph: GlyphInfo = {
 		AtlasX = atlasX,
@@ -114,24 +112,26 @@ function FontFace.GetGlyph(self: FontFace, char: string): GlyphInfo
 		SdfBitmap = sdfBitmap,
 	}
 
-	self._cache[char] = glyph
+	self._cache[cacheKey] = glyph
 	return glyph
 end
 
-function FontFace.GetGlyphTexture(self: FontFace, char: string, color: Color3): Texture.Texture?
+function FontFace.GetGlyphTexture(self: FontFace, charOrCodepoint: string | number, color: Color3): Texture.Texture?
 	-- quantize colors to prevent memory bloat during continuous animated color sweeps
 	local qr = math.clamp(math.round(color.R * 31) / 31, 0, 1)
 	local qg = math.clamp(math.round(color.G * 31) / 31, 0, 1)
 	local qb = math.clamp(math.round(color.B * 31) / 31, 0, 1)
 	local qColor = Color3.new(qr, qg, qb)
 
-	local key = char .. "_" .. qColor:ToHex()
+	local codepoint: number = typeof(charOrCodepoint) == "number" and charOrCodepoint
+		or (string.byte(charOrCodepoint :: string) or 0)
+	local key = codepoint .. "_" .. qColor:ToHex()
 	local cached = self._glyphTextures[key]
 	if cached then
 		return cached
 	end
 
-	local glyph = self:GetGlyph(char)
+	local glyph = self:GetGlyph(codepoint)
 	if glyph.Width == 0 or glyph.Height == 0 or not glyph.SdfBitmap then
 		return nil
 	end
@@ -154,9 +154,7 @@ function FontFace.GetGlyphTexture(self: FontFace, char: string, color: Color3): 
 			end
 
 			local normD = val / 255
-			local alphaFactor = if self.Aliased
-				then (if val >= 128 then 1 else 0)
-				else math.clamp((normD - 0.4375) / 0.125, 0, 1)
+			local alphaFactor = self.Aliased and (val >= 128 and 1 or 0) or math.clamp((normD - 0.4375) / 0.125, 0, 1)
 			local alpha = math.floor(alphaFactor * 255)
 
 			local offset = (gy * width + gx) * 4
@@ -181,11 +179,11 @@ function FontFace.MeasureText(self: FontFace, text: string, fontSize: number?): 
 
 	local width = 0
 	for i = 1, #text do
-		local c = string.sub(text, i, i)
-		if c == " " then
+		local code = string.byte(text, i)
+		if code == 0x20 then
 			width += self.FontSize * 0.25
 		else
-			local glyph = self:GetGlyph(c)
+			local glyph = self:GetGlyph(code)
 			width += glyph.Advance
 		end
 	end
@@ -208,16 +206,16 @@ function FontFace.GetCharacterOffsets(self: FontFace, text: string, fontSize: nu
 	local result: { CharLayout } = {}
 	local currentX = 0
 	for i = 1, #text do
-		local c = string.sub(text, i, i)
+		local code = string.byte(text, i)
 		local adv = 0
-		if c == " " then
+		if code == 0x20 then
 			adv = self.FontSize * 0.25
 		else
-			local glyph = self:GetGlyph(c)
+			local glyph = self:GetGlyph(code)
 			adv = glyph.Advance
 		end
 		table.insert(result, {
-			char = c,
+			char = string.char(code),
 			xOffset = currentX,
 			advance = adv,
 		})
@@ -329,14 +327,14 @@ function FontFace._drawTextInternal(
 	local cursorX = position.X
 
 	for i = 1, #text do
-		local c = string.sub(text, i, i)
+		local code = string.byte(text, i)
 
-		if c == " " then
+		if code == 0x20 then
 			cursorX += self.FontSize * 0.25
 			continue
 		end
 
-		local glyph = self:GetGlyph(c)
+		local glyph = self:GetGlyph(code)
 		if glyph.Width == 0 or glyph.Height == 0 then
 			cursorX += glyph.Advance
 			continue
@@ -345,7 +343,7 @@ function FontFace._drawTextInternal(
 		local drawW = Vector2.new(glyph.Width, glyph.Height)
 		local drawBX = glyph.BearingX
 		local drawBY = glyph.BearingY
-		local glyphTex = self:GetGlyphTexture(c, color)
+		local glyphTex = self:GetGlyphTexture(code, color)
 
 		if outlineSize > 0 then
 			for dx = -outlineSize, outlineSize do
