@@ -49,25 +49,15 @@ function Window.Clear(self: Window, color: Color3)
 	end
 end
 
-function Window.ApplyShader(self: Window, module: ModuleScript, downscale: number?)
+function Window.ApplyShaderAsync(self: Window, module: ModuleScript, downscale: number?)
 	for i, relatedActors in self._actors do
 		local img = self._images[i]
 		local fullSize = img.Size
 		local fullBuf = img:ReadPixelsBuffer(Vector2.zero, fullSize)
 		local quadOrigin = self._quads[i][1]
 
-		local halfW = math.ceil(fullSize.X / 2)
-		local halfH = math.ceil(fullSize.Y / 2)
-
-		local subTiles = {
-			{ Vector2.new(0, 0), Vector2.new(halfW, halfH) },
-			{ Vector2.new(halfW, 0), Vector2.new(fullSize.X - halfW, halfH) },
-			{ Vector2.new(0, halfH), Vector2.new(halfW, fullSize.Y - halfH) },
-			{ Vector2.new(halfW, halfH), Vector2.new(fullSize.X - halfW, fullSize.Y - halfH) },
-		}
-
 		for j, actor in relatedActors do
-			local tile = subTiles[j]
+			local tile = self._subTiles[j]
 			if tile and tile[2].X > 0 and tile[2].Y > 0 then
 				actor:SendMessage(
 					"ApplyShaderTile",
@@ -85,7 +75,7 @@ function Window.ApplyShader(self: Window, module: ModuleScript, downscale: numbe
 	end
 end
 
-function Window.ApplyShaderToImage(
+function Window.ApplyShaderToImageAsync(
 	self: Window,
 	module: ModuleScript,
 	img: EditableImage,
@@ -96,20 +86,10 @@ function Window.ApplyShaderToImage(
 	local fullBuf = img:ReadPixelsBuffer(Vector2.zero, fullSize)
 	local org = origin or Vector2.zero
 
-	local halfW = math.ceil(fullSize.X / 2)
-	local halfH = math.ceil(fullSize.Y / 2)
-
-	local subTiles = {
-		{ Vector2.new(0, 0), Vector2.new(halfW, halfH) },
-		{ Vector2.new(halfW, 0), Vector2.new(fullSize.X - halfW, halfH) },
-		{ Vector2.new(0, halfH), Vector2.new(halfW, fullSize.Y - halfH) },
-		{ Vector2.new(halfW, halfH), Vector2.new(fullSize.X - halfW, fullSize.Y - halfH) },
-	}
-
 	local actors = self._actors[1]
 	if actors then
 		for j, actor in actors do
-			local tile = subTiles[j]
+			local tile = self._subTiles[j]
 			if tile and tile[2].X > 0 and tile[2].Y > 0 then
 				actor:SendMessage("ApplyShaderTile", module, img, fullBuf, org, self.Size, downscale, tile[1], tile[2])
 			end
@@ -132,6 +112,7 @@ export type Window = typeof(setmetatable(
 		_quads: { { Vector2 } },
 		_images: { EditableImage },
 		_actors: { { Actor } },
+		_subTiles: { { Vector2 } },
 	},
 	Window
 ))
@@ -143,10 +124,22 @@ local function new(size: Vector2): Window
 		_quads = {},
 		_images = {},
 		_actors = {},
+		_subTiles = {},
+		_pixelBuffers = {},
 	}, Window) :: Window
 
 	local quads = CalculateEditableImagesNeededForMatrix(size.X, size.Y)
 	self._quads = quads
+
+	local width = size.X
+	local quadHeight = math.ceil(size.Y / 4)
+
+	self._subTiles = {
+		{ Vector2.new(0, 0), Vector2.new(width, quadHeight) },
+		{ Vector2.new(0, quadHeight), Vector2.new(width, quadHeight) },
+		{ Vector2.new(0, quadHeight * 2), Vector2.new(width, quadHeight) },
+		{ Vector2.new(0, quadHeight * 3), Vector2.new(width, size.Y - quadHeight * 3) },
+	}
 
 	for i, quad in quads do
 		local quadSize = quad[2]

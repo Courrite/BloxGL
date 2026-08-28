@@ -50,7 +50,7 @@ function ParallelTexture.ApplyShaderParallel(
 	origin: Vector2?,
 	downscale: number?
 )
-	self._window:ApplyShaderToImage(shaderModule, self._backImg, origin, downscale)
+	self._window:ApplyShaderToImageAsync(shaderModule, self._backImg, origin, downscale)
 end
 
 function ParallelTexture.SwapBuffers(self: ParallelTexture)

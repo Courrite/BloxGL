@@ -5,6 +5,8 @@ local actor = script.Parent :: Actor
 
 local compiledShaderObjects = {} :: { [ModuleScript]: Shader.Shader }
 
+local subBuffer: buffer = nil -- guaranteed to exist during ApplyShaderTile call
+
 actor:BindToMessage(
 	"ApplyShaderTile",
 	function(
@@ -29,16 +31,20 @@ actor:BindToMessage(
 			shaderObj:SetDownscale(downscale or 2)
 		end
 
-		local subBuf = buffer.create(math.floor(tSize.X) * math.floor(tSize.Y) * 4)
+		if not subBuffer then
+			-- size remains constant so we just create it once and never recreate it ever again
+			subBuffer = buffer.create(math.floor(tSize.X) * math.floor(tSize.Y) * 4)
+		end
 
 		task.desynchronize()
 
 		if shaderObj then
-			shaderObj:ApplyToBuffer(subBuf, imgSize, origin, windowSize, nil, tOff, tSize, fullBuf)
+			shaderObj:ApplyToBuffer(subBuffer, imgSize, origin, windowSize, nil, tOff, tSize, fullBuf)
 		end
 
 		task.synchronize()
 
-		image:WritePixelsBuffer(tOff, tSize, subBuf)
+		image:WritePixelsBuffer(tOff, tSize, subBuffer)
+		buffer.fill(subBuffer, 0, 0)
 	end
 )
